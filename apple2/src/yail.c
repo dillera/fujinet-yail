@@ -1,84 +1,146 @@
-// YAAIL - Yet Another Apple Image Loader
-// Based off of Brad's YAIL for Atari
-//
+#include <stdio.h>
+#include <stdlib.h>
+#include <apple2.h>
+#include <conio.h>
+#include <string.h>
 
-#include "fujinet-network.h"
-#include "yail.h"
+// Function prototypes
+void init_text_mode(void);
+void display_menu(void);
+void init_graphics(void);
+void load_local_image(const char *filename);
+void load_remote_image(const char *image_url, unsigned char *image_data);
+void display_image(void);
+void handle_err(const char *msg);
 
-#define HGR_SCREEN_ADDRESS ((unsigned char*)0x2000)
+unsigned char *image_buffer;
 
-char buffer[8192];
-char result[1024];
-char *version = "v1.3.14";
-char *my_version = "v1.0.0";
-char *url;
-char* image_url = "n:http://fujinet.diller.org/APPLE/black.gr";
-char* image_data;
-uint8_t err = 0;
-uint16_t conn_bw;
-uint8_t connected;
-uint8_t conn_err;
-uint8_t trans_type = OPEN_TRANS_CRLF;
+int main() {
+    char choice;
 
-void debug() {}
+    // Initialize text mode and display menu
+    init_text_mode();
+    display_menu();
 
-void setup() {
-    uint8_t init_r = 0;
-    bzero(buffer, 8192);
-    bzero(result, 1024);
-    gotox(0);
-    init_r = network_init();
-    printf("init: %d, derr: %d\n", init_r, fn_device_error);
-    #ifdef BUILD_APPLE2
-    printf("nw: %d\n", sp_network);
-    #endif
+    // Wait for user input
+    choice = cgetc();
+
+    if (choice == 'L' || choice == 'l') {
+        // Initialize graphics
+        init_graphics();
+
+        // Load the local test image
+        load_local_image("test.hrg");
+
+        // Display the image
+        display_image();
+    } else if (choice == 'F' || choice == 'f') {
+        // Initialize graphics
+        init_graphics();
+
+        // Allocate memory for the image
+        image_buffer = (unsigned char *)malloc(8192);
+        if (!image_buffer) {
+            printf("Error: Could not allocate memory for image\n");
+            exit(1);
+        }
+
+        // Load the remote image
+        load_remote_image("http://example.com/test.hrg", image_buffer);
+
+        // Display the image
+        display_image();
+    } else {
+        printf("Invalid choice.\n");
+    }
+
+    // Wait for a key press before exiting
+    while (!kbhit()) {}
+
+    // Free the allocated image buffer
+    if (image_buffer) {
+        free(image_buffer);
+    }
+
+    return 0;
 }
 
-void handle_err(char *reason) {
-    if (err) {
-        printf("Error: %d (d: %d) %s\n", err, fn_device_error, reason);
-        cgetc();
+void init_text_mode() {
+    // Set the text mode
+    text();
+    home();
+    clrscr();
+}
+
+void display_menu() {
+    // Print the menu
+    cputs("Welcome to Yet Another Image Loader for Apple\n");
+    cputs("L - Press to load local HRG image\n");
+    cputs("F - Press to load remote HRG with FujiNet\n");
+}
+
+void init_graphics() {
+    // Set the graphics mode to HiRes
+    hires();
+}
+
+void load_local_image(const char *filename) {
+    FILE *file;
+    long file_size;
+
+    // Open the file
+    file = fopen(filename, "rb");
+    if (!file) {
+        printf("Error: Could not open file %s\n", filename);
         exit(1);
     }
+
+    // Get the file size
+    fseek(file, 0, SEEK_END);
+    file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    // Allocate memory for the image
+    image_buffer = (unsigned char *)malloc(file_size);
+    if (!image_buffer) {
+        printf("Error: Could not allocate memory for image\n");
+        fclose(file);
+        exit(1);
+    }
+
+    // Read the file into the buffer
+    fread(image_buffer, 1, file_size, file);
+
+    // Close the file
+    fclose(file);
 }
 
-// Function to load the image from a remote URL
-void load_image(const char* image_url, unsigned char* image_data) {
+void load_remote_image(const char *image_url, unsigned char *image_data) {
+    const char *url;
+    int err;
+
+    // Placeholder function to simulate loading an image from a remote URL
+    // This function will need to be replaced with actual FujiNet network code
+
     url = (const char *)image_url;
     err = network_open(url, OPEN_MODE_HTTP_GET, 0);
     handle_err("open");
-    err = network_read(url, buffer, 8192);
+    err = network_read(url, image_data, 8192);
     handle_err("read");
     network_close(url);
-    printf("simple read (same as GET):\n");
-    handle_err("get:close");
+    printf("Image loaded from URL: %s\n", image_url);
 }
 
-// Function to display the image on the Apple II screen
-void display_image(const unsigned char* image_data) {
-    // Set the graphics mode to Hi-Res
-    *(unsigned char*)0xC050 = 0;
-    *(unsigned char*)0xC057 = 0;
-    // Copy the image data to the Hi-Res screen buffer
-    // Assuming the image size is 280x192 pixels (8192 bytes)
-    memcpy(HGR_SCREEN_ADDRESS, image_data, 8192);
-    // Wait for a key press before exiting
-    cgetc();
+void display_image() {
+    // Copy the image buffer to the graphics screen
+    unsigned char *screen = (unsigned char *)0x2000;
+    for (int i = 0; i < 8192; i++) {
+        screen[i] = image_buffer[i];
+    }
 }
 
-int main() {
-    setup();
-    // Allocate memory for the image data
-    // Assuming the image size is 280x192 pixels (8192 bytes)
-    image_data = (char*)malloc(8192);
-    printf("yaail %s\n", my_version);
-    printf("fn-lib %s\n", version);
-    printf("Base URL: %s\n", image_url);
-    // Load the image from the remote URL
-    load_image(image_url, image_data);
-    // Display the image on the Apple II screen
-    display_image(image_data);
-    // Free the allocated memory
-    free(image_data);
-    return 0;
+void handle_err(const char *msg) {
+    // Placeholder function to handle network errors
+    printf("Error: %s\n", msg);
+    exit(1);
 }
