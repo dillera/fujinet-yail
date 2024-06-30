@@ -45,3 +45,9 @@ It sends your query tokens as the search terms and builds a list of URLs that ha
 It then downloads the images, converts them to something compatible with gfx9 and then streams to the YAIL.XEX app.
 YAIL requests the next image by sending the server a "next" token.
 When you quit, the "quit" token is sent.
+
+
+
+## Apple Client
+The Apple client is currently being developed.
+
