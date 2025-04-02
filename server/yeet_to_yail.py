@@ -48,6 +48,10 @@ camera_thread = None
 camera_done = False
 filenames = []
 camera_name = None
+openai_model = None
+openai_size = None
+openai_quality = None
+openai_style = None
 
 def prep_image_for_vbxe(image: Image.Image, target_width: int=YAIL_W, target_height: int=YAIL_H) -> Image.Image:
     logger.info(f'Image size: {image.size}')
@@ -302,13 +306,18 @@ def search_images(term: str, max_images: int=1000) -> list:
 
         return urls
 
-def generate_image_with_openai(prompt: str, api_key: str = None) -> str:
+def generate_image_with_openai(prompt: str, api_key: str = None, model: str = "dall-e-3", size: str = "1024x1024", quality: str = "standard", style: str = "vivid") -> str:
     """
-    Generate an image using OpenAI's DALL-E model and return the URL.
+    Generate an image using OpenAI's image generation models and return the URL.
     
     Args:
         prompt (str): The text prompt to generate an image from
         api_key (str, optional): OpenAI API key. If None, uses OPENAI_API_KEY environment variable
+        model (str, optional): The model to use. Options: "dall-e-3" (default) or "gpt-4o"
+        size (str, optional): Image size. Options for DALL-E 3: "1024x1024" (default), "1792x1024", or "1024x1792"
+                             For GPT-4o, size parameter may not be applicable
+        quality (str, optional): Image quality. Options: "standard" (default) or "hd" (DALL-E 3 only)
+        style (str, optional): Image style. Options: "vivid" (default) or "natural" (DALL-E 3 only)
         
     Returns:
         str: URL of the generated image
@@ -323,20 +332,52 @@ def generate_image_with_openai(prompt: str, api_key: str = None) -> str:
         
         # Initialize the OpenAI client
         client = openai.OpenAI(api_key=api_key)
-            
-        # Generate image using DALL-E model
-        logger.info(f"Generating image with prompt: '{prompt}'")
-        response = client.images.generate(
-            model="dall-e-3",
-            prompt=prompt,
-            n=1,
-            size="1024x1024"
-        )
         
-        # Return the URL of the generated image
-        image_url = response.data[0].url
-        logger.info(f"Image generated successfully: {image_url}")
-        return image_url
+        # Generate image based on model type
+        logger.info(f"Generating image with {model} model, prompt: '{prompt}'")
+        
+        if model.lower() == "gpt-4o":
+            # GPT-4o image generation
+            # Note: Parameters may differ for GPT-4o, adjust as needed based on official documentation
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are an image generation assistant. Generate an image based on the user's description."},
+                    {"role": "user", "content": f"Generate an image of: {prompt}"}
+                ],
+                tools=[{"type": "image_generator"}]
+            )
+            
+            # Extract image URL from response
+            # Note: This is a placeholder implementation and may need adjustment based on actual API response format
+            for tool_call in response.choices[0].message.tool_calls:
+                if tool_call.function.name == "image_generator":
+                    # Parse the function arguments to get the image URL
+                    import json
+                    function_args = json.loads(tool_call.function.arguments)
+                    image_url = function_args.get("url")
+                    if image_url:
+                        logger.info(f"Image generated successfully with GPT-4o: {image_url}")
+                        return image_url
+            
+            logger.error("Failed to extract image URL from GPT-4o response")
+            return None
+            
+        else:  # Default to DALL-E 3
+            # DALL-E 3 image generation
+            response = client.images.generate(
+                model="dall-e-3",
+                prompt=prompt,
+                n=1,
+                size=size,
+                quality=quality,
+                style=style
+            )
+            
+            # Return the URL of the generated image
+            image_url = response.data[0].url
+            logger.info(f"Image generated successfully with DALL-E 3: {image_url}")
+            return image_url
         
     except Exception as e:
         logger.error(f"Error generating image with OpenAI: {e}")
@@ -466,7 +507,7 @@ def handle_client_connection(client_socket: socket.socket) -> None:
                 logger.info(f"Generating image with prompt: '{prompt}'")
                 
                 # Generate image using OpenAI
-                url = generate_image_with_openai(prompt)
+                url = generate_image_with_openai(prompt, model=openai_model, size=openai_size, quality=openai_quality, style=openai_style)
                 
                 if url:
                     # Stream the generated image to the client
@@ -516,7 +557,7 @@ def handle_client_connection(client_socket: socket.socket) -> None:
                     logger.info(f"Regenerating image with prompt: '{prompt}'")
                     
                     # Generate a new image with the same prompt
-                    url = generate_image_with_openai(prompt)
+                    url = generate_image_with_openai(prompt, model=openai_model, size=openai_size, quality=openai_quality, style=openai_style)
                     
                     if url:
                         # Stream the generated image to the client
@@ -549,6 +590,55 @@ def handle_client_connection(client_socket: socket.socket) -> None:
                 #    global YAIL_H
                 #    YAIL_H = 240
                 tokens.pop(0)
+
+            elif tokens[0] == 'openai-config':
+                tokens.pop(0)
+                if len(tokens) > 0:
+                    # Process OpenAI configuration parameters
+                    global openai_model, openai_size, openai_quality, openai_style
+                    
+                    # Format: openai-config [param] [value]
+                    param = tokens[0].lower()
+                    tokens.pop(0)
+                    
+                    if len(tokens) > 0:
+                        value = tokens[0]
+                        tokens.pop(0)
+                        
+                        if param == "model":
+                            if value in ["dall-e-3", "gpt-4o"]:
+                                openai_model = value
+                                client_socket.send(bytes(f"OpenAI model set to {value}".encode('utf-8')))
+                            else:
+                                client_socket.send(bytes(f"Invalid model. Use 'dall-e-3' or 'gpt-4o'".encode('utf-8')))
+                        
+                        elif param == "size":
+                            if value in ["1024x1024", "1792x1024", "1024x1792"]:
+                                openai_size = value
+                                client_socket.send(bytes(f"Image size set to {value}".encode('utf-8')))
+                            else:
+                                client_socket.send(bytes(f"Invalid size. Use '1024x1024', '1792x1024', or '1024x1792'".encode('utf-8')))
+                        
+                        elif param == "quality":
+                            if value in ["standard", "hd"]:
+                                openai_quality = value
+                                client_socket.send(bytes(f"Image quality set to {value}".encode('utf-8')))
+                            else:
+                                client_socket.send(bytes(f"Invalid quality. Use 'standard' or 'hd'".encode('utf-8')))
+                        
+                        elif param == "style":
+                            if value in ["vivid", "natural"]:
+                                openai_style = value
+                                client_socket.send(bytes(f"Image style set to {value}".encode('utf-8')))
+                            else:
+                                client_socket.send(bytes(f"Invalid style. Use 'vivid' or 'natural'".encode('utf-8')))
+                        
+                        else:
+                            client_socket.send(bytes(f"Unknown parameter '{param}'. Use 'model', 'size', 'quality', or 'style'".encode('utf-8')))
+                    else:
+                        client_socket.send(bytes(f"Current OpenAI config: model={openai_model}, size={openai_size}, quality={openai_quality}, style={openai_style}".encode('utf-8')))
+                else:
+                    client_socket.send(bytes(f"Current OpenAI config: model={openai_model}, size={openai_size}, quality={openai_quality}, style={openai_style}".encode('utf-8')))
 
             elif tokens[0] == 'quit':
                 done = True
@@ -597,10 +687,20 @@ def F(file_path):
 
 def main():
     global camera_name
+    global openai_model
+    global openai_size
+    global openai_quality
+    global openai_style
 
     # Initialize the image to send with something
     initial_image = Image.new("L", (YAIL_W,YAIL_H))
     update_yail_data(pack_shades(initial_image), GRAPHICS_8)
+
+    # Default OpenAI parameters
+    openai_model = 'dall-e-3'
+    openai_size = '1024x1024'
+    openai_quality = 'standard'
+    openai_style = 'vivid'
 
     bind_ip = '0.0.0.0'
     bind_port = 5556
@@ -614,6 +714,10 @@ def main():
         parser.add_argument('--port', nargs='+', default=None, help='Specify the port to listen too', required=False)
         parser.add_argument('--loglevel', nargs='+', default=None, help='The level of logging', required=False)
         parser.add_argument('--openai-api-key', type=str, help='OpenAI API key for image generation', required=False)
+        parser.add_argument('--openai-model', type=str, default='dall-e-3', choices=['dall-e-3', 'gpt-4o'], help='OpenAI image generation model to use', required=False)
+        parser.add_argument('--openai-size', type=str, default='1024x1024', choices=['1024x1024', '1792x1024', '1024x1792'], help='Image size for DALL-E 3 (ignored for GPT-4o)', required=False)
+        parser.add_argument('--openai-quality', type=str, default='standard', choices=['standard', 'hd'], help='Image quality for DALL-E 3 (ignored for GPT-4o)', required=False)
+        parser.add_argument('--openai-style', type=str, default='vivid', choices=['vivid', 'natural'], help='Image style for DALL-E 3 (ignored for GPT-4o)', required=False)
         
         args = parser.parse_args()
 
@@ -622,6 +726,18 @@ def main():
         
         if args.openai_api_key:
             os.environ["OPENAI_API_KEY"] = args.openai_api_key
+        
+        if args.openai_model:
+            openai_model = args.openai_model
+            
+        if args.openai_size:
+            openai_size = args.openai_size
+            
+        if args.openai_quality:
+            openai_quality = args.openai_quality
+            
+        if args.openai_style:
+            openai_style = args.openai_style
         
         if args.paths is not None and len(args.paths) == 1 and os.path.isdir(args.paths[0]):
             # If a single argument is passed and it's a directory
