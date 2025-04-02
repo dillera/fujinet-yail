@@ -18,6 +18,7 @@ from pprint import pformat
 from PIL import Image
 import numpy as np
 import sys
+import openai
 
 # Set up logging first thing
 logging.basicConfig(level=logging.WARN)
@@ -301,6 +302,46 @@ def search_images(term: str, max_images: int=1000) -> list:
 
         return urls
 
+def generate_image_with_openai(prompt: str, api_key: str = None) -> str:
+    """
+    Generate an image using OpenAI's DALL-E model and return the URL.
+    
+    Args:
+        prompt (str): The text prompt to generate an image from
+        api_key (str, optional): OpenAI API key. If None, uses OPENAI_API_KEY environment variable
+        
+    Returns:
+        str: URL of the generated image
+    """
+    try:
+        # Set API key from parameter or environment variable
+        api_key = api_key or os.environ.get("OPENAI_API_KEY")
+            
+        if not api_key:
+            logger.error("OpenAI API key not found. Set OPENAI_API_KEY environment variable or provide api_key parameter.")
+            return None
+        
+        # Initialize the OpenAI client
+        client = openai.OpenAI(api_key=api_key)
+            
+        # Generate image using DALL-E model
+        logger.info(f"Generating image with prompt: '{prompt}'")
+        response = client.images.generate(
+            model="dall-e-3",
+            prompt=prompt,
+            n=1,
+            size="1024x1024"
+        )
+        
+        # Return the URL of the generated image
+        image_url = response.data[0].url
+        logger.info(f"Image generated successfully: {image_url}")
+        return image_url
+        
+    except Exception as e:
+        logger.error(f"Error generating image with OpenAI: {e}")
+        return None
+
 def camera_handler(gfx_mode: int) -> None:
     import pygame.camera
     import pygame.image
@@ -376,6 +417,7 @@ def handle_client_connection(client_socket: socket.socket) -> None:
     global YAIL_H
     gfx_mode = GRAPHICS_8
     client_mode = None
+    last_prompt = None  # Store the last prompt for regeneration
 
     connections = connections + 1
     logger.info(f'Starting Connection: %d' % connections)
@@ -415,6 +457,27 @@ def handle_client_connection(client_socket: socket.socket) -> None:
                         url = urls[url_idx]
                         time.sleep(SOCKET_WAIT_TIME)
                 tokens = []
+                
+            elif tokens[0] == 'generate':
+                client_mode = 'generate'
+                # Join all tokens after 'generate' as the prompt
+                prompt = ' '.join(tokens[1:])
+                last_prompt = prompt  # Store the prompt for later use with 'next' command
+                logger.info(f"Generating image with prompt: '{prompt}'")
+                
+                # Generate image using OpenAI
+                url = generate_image_with_openai(prompt)
+                
+                if url:
+                    # Stream the generated image to the client
+                    if not stream_YAI(client_socket, gfx_mode, url=url):
+                        logger.warning(f'Problem with generated image: {url}')
+                        client_socket.send(bytes(b'ERROR: Failed to stream generated image'))
+                else:
+                    logger.warning('Failed to generate image with OpenAI')
+                    client_socket.send(bytes(b'ERROR: Failed to generate image'))
+                
+                tokens = []
 
             elif tokens[0] == 'files':
                 client_mode = 'files'
@@ -445,6 +508,25 @@ def handle_client_connection(client_socket: socket.socket) -> None:
                     tokens.pop(0)
                 elif client_mode == 'video':
                     send_yail_data(client_socket)
+                    tokens.pop(0)
+                elif client_mode == 'generate':
+                    # For generate mode, we'll regenerate with the same prompt
+                    # The prompt is stored in last_prompt
+                    prompt = last_prompt
+                    logger.info(f"Regenerating image with prompt: '{prompt}'")
+                    
+                    # Generate a new image with the same prompt
+                    url = generate_image_with_openai(prompt)
+                    
+                    if url:
+                        # Stream the generated image to the client
+                        if not stream_YAI(client_socket, gfx_mode, url=url):
+                            logger.warning(f'Problem with generated image: {url}')
+                            client_socket.send(bytes(b'ERROR: Failed to stream generated image'))
+                    else:
+                        logger.warning('Failed to generate image with OpenAI')
+                        client_socket.send(bytes(b'ERROR: Failed to generate image'))
+                    
                     tokens.pop(0)
                 elif client_mode == 'files':
                     filename = None
@@ -531,11 +613,15 @@ def main():
         parser.add_argument('--camera', nargs='?', default=None, help='The camera device to use', required=False)
         parser.add_argument('--port', nargs='+', default=None, help='Specify the port to listen too', required=False)
         parser.add_argument('--loglevel', nargs='+', default=None, help='The level of logging', required=False)
+        parser.add_argument('--openai-api-key', type=str, help='OpenAI API key for image generation', required=False)
         
         args = parser.parse_args()
 
         if args.camera:
             camera_name = args.camera
+        
+        if args.openai_api_key:
+            os.environ["OPENAI_API_KEY"] = args.openai_api_key
         
         if args.paths is not None and len(args.paths) == 1 and os.path.isdir(args.paths[0]):
             # If a single argument is passed and it's a directory
