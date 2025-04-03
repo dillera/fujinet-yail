@@ -7,7 +7,6 @@ import requests
 import re
 import time
 import logging
-import os
 from tqdm import tqdm
 import socket
 from threading import Thread, Lock
@@ -38,6 +37,65 @@ PALETTE_BLOCK = 0x06
 IMAGE_BLOCK = 0x07
 
 
+class OpenAIConfig:
+    """
+    Configuration class for OpenAI image generation settings.
+    Provides validation and management of OpenAI-related parameters.
+    """
+    # Valid configuration options
+    VALID_MODELS = ["dall-e-3", "gpt-4o"]
+    VALID_SIZES = ["1024x1024", "1792x1024", "1024x1792"]
+    VALID_QUALITIES = ["standard", "hd"]
+    VALID_STYLES = ["vivid", "natural"]
+    
+    def __init__(self):
+        # Default settings
+        self.model = "dall-e-3"
+        self.size = "1024x1024"
+        self.quality = "standard"
+        self.style = "vivid"
+        self.api_key = None
+    
+    def set_model(self, model):
+        """Set the model if valid, otherwise return False"""
+        if model in self.VALID_MODELS:
+            self.model = model
+            return True
+        return False
+    
+    def set_size(self, size):
+        """Set the size if valid, otherwise return False"""
+        if size in self.VALID_SIZES:
+            self.size = size
+            return True
+        return False
+    
+    def set_quality(self, quality):
+        """Set the quality if valid, otherwise return False"""
+        if quality in self.VALID_QUALITIES:
+            self.quality = quality
+            return True
+        return False
+    
+    def set_style(self, style):
+        """Set the style if valid, otherwise return False"""
+        if style in self.VALID_STYLES:
+            self.style = style
+            return True
+        return False
+    
+    def set_api_key(self, api_key):
+        """Set the API key"""
+        self.api_key = api_key
+        # Update environment variable for compatibility
+        if api_key:
+            os.environ["OPENAI_API_KEY"] = api_key
+    
+    def __str__(self):
+        """String representation of the configuration"""
+        return f"model={self.model}, size={self.size}, quality={self.quality}, style={self.style}"
+
+
 # The yail_data will contain the image that is to be sent.  It
 # is protected with a Mutex so that when the image is being sent
 # it won't be written by the server.
@@ -48,10 +106,7 @@ camera_thread = None
 camera_done = False
 filenames = []
 camera_name = None
-openai_model = None
-openai_size = None
-openai_quality = None
-openai_style = None
+openai_config = OpenAIConfig()  # Create a single instance of the configuration
 
 def prep_image_for_vbxe(image: Image.Image, target_width: int=YAIL_W, target_height: int=YAIL_H) -> Image.Image:
     logger.info(f'Image size: {image.size}')
@@ -170,8 +225,8 @@ def convertToYaiVBXE(image_data: bytes, palette_data: bytes, gfx_mode: int) -> b
     import struct
 
     #ttlbytes = YAIL_W * YAIL_H; # image_data.shape[0] * image_data.shape[1]
-    logger.info('Image data size: %d' % len(image_data))
-    logger.info('Palette data size: %d' % len(palette_data))
+    logger.info(f'Image data size: {len(image_data)}')
+    logger.info(f'Palette data size: {len(palette_data)}')
 
     image_yai = bytearray()
     image_yai += bytes([1, 4, 0])            # version
@@ -184,7 +239,7 @@ def convertToYaiVBXE(image_data: bytes, palette_data: bytes, gfx_mode: int) -> b
     image_yai += struct.pack("<I", len(image_data)) # num bytes height x width
     image_yai += bytearray(image_data)       # image
 
-    logger.info('YAI size: %d' % len(image_yai))
+    logger.info(f'YAI size: {len(image_yai)}')
 
     return image_yai
 
@@ -221,7 +276,7 @@ def stream_YAI(client: str, gfx_mode: int, url: str = None, filepath: str = None
     # download the body of response by chunk, not immediately
     try:
         if url is not None:
-            logger.info(f'Loading %s %s' % (url, url.encode()))
+            logger.info(f'Loading {url} {url.encode()}')
 
             file_size = 0
 
@@ -320,14 +375,14 @@ def generate_image_with_openai(prompt: str, api_key: str = None, model: str = "d
         style (str, optional): Image style. Options: "vivid" (default) or "natural" (DALL-E 3 only)
         
     Returns:
-        str: URL of the generated image
+        str: URL of the generated image or None if generation failed
     """
     try:
-        # Set API key from parameter or environment variable
-        api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        # Set API key from parameter, config, or environment variable
+        api_key = api_key or openai_config.api_key or os.environ.get("OPENAI_API_KEY")
             
         if not api_key:
-            logger.error("OpenAI API key not found. Set OPENAI_API_KEY environment variable or provide api_key parameter.")
+            logger.error("OpenAI API key not found. Set OPENAI_API_KEY environment variable, use --openai-api-key, or provide api_key parameter.")
             return None
         
         # Initialize the OpenAI client
@@ -338,46 +393,56 @@ def generate_image_with_openai(prompt: str, api_key: str = None, model: str = "d
         
         if model.lower() == "gpt-4o":
             # GPT-4o image generation
-            # Note: Parameters may differ for GPT-4o, adjust as needed based on official documentation
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": "You are an image generation assistant. Generate an image based on the user's description."},
-                    {"role": "user", "content": f"Generate an image of: {prompt}"}
-                ],
-                tools=[{"type": "image_generator"}]
-            )
-            
-            # Extract image URL from response
-            # Note: This is a placeholder implementation and may need adjustment based on actual API response format
-            for tool_call in response.choices[0].message.tool_calls:
-                if tool_call.function.name == "image_generator":
-                    # Parse the function arguments to get the image URL
-                    import json
-                    function_args = json.loads(tool_call.function.arguments)
-                    image_url = function_args.get("url")
-                    if image_url:
-                        logger.info(f"Image generated successfully with GPT-4o: {image_url}")
-                        return image_url
-            
-            logger.error("Failed to extract image URL from GPT-4o response")
-            return None
+            try:
+                # Note: Parameters may differ for GPT-4o, adjust as needed based on official documentation
+                response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": "You are an image generation assistant. Generate an image based on the user's description."},
+                        {"role": "user", "content": f"Generate an image of: {prompt}"}
+                    ],
+                    tools=[{"type": "image_generator"}]
+                )
+                
+                # Extract image URL from response
+                for tool_call in response.choices[0].message.tool_calls or []:
+                    if tool_call.function.name == "image_generator":
+                        # Parse the function arguments to get the image URL
+                        import json
+                        try:
+                            function_args = json.loads(tool_call.function.arguments)
+                            image_url = function_args.get("url")
+                            if image_url:
+                                logger.info(f"Image generated successfully with GPT-4o: {image_url}")
+                                return image_url
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Error parsing GPT-4o response: {e}")
+                
+                logger.error("Failed to extract image URL from GPT-4o response")
+                return None
+            except Exception as e:
+                logger.error(f"Error with GPT-4o image generation: {e}")
+                return None
             
         else:  # Default to DALL-E 3
             # DALL-E 3 image generation
-            response = client.images.generate(
-                model="dall-e-3",
-                prompt=prompt,
-                n=1,
-                size=size,
-                quality=quality,
-                style=style
-            )
-            
-            # Return the URL of the generated image
-            image_url = response.data[0].url
-            logger.info(f"Image generated successfully with DALL-E 3: {image_url}")
-            return image_url
+            try:
+                response = client.images.generate(
+                    model="dall-e-3",
+                    prompt=prompt,
+                    n=1,
+                    size=size,
+                    quality=quality,
+                    style=style
+                )
+                
+                # Return the URL of the generated image
+                image_url = response.data[0].url
+                logger.info(f"Image generated successfully with DALL-E 3: {image_url}")
+                return image_url
+            except Exception as e:
+                logger.error(f"Error with DALL-E 3 image generation: {e}")
+                return None
         
     except Exception as e:
         logger.error(f"Error generating image with OpenAI: {e}")
@@ -448,24 +513,114 @@ def camera_handler(gfx_mode: int) -> None:
         # grab next frame    
         img = webcam.get_image()
 
-    camera_done = False
+def send_client_response(client_socket: socket.socket, message: str, is_error: bool = False) -> None:
+    """
+    Send a standardized response to the client.
+    
+    Args:
+        client_socket: The client socket to send the response to
+        message: The message to send
+        is_error: Whether this is an error message
+    """
+    prefix = "ERROR: " if is_error else "OK: "
+    try:
+        client_socket.sendall(bytes(f"{prefix}{message}".encode('utf-8')))
+        if is_error:
+            logger.warning(f"Sent error to client: {message}")
+        else:
+            logger.info(f"Sent response to client: {message}")
+    except Exception as e:
+        logger.error(f"Failed to send response to client: {e}")
+
+def stream_random_image_from_urls(client_socket: socket.socket, urls: list, gfx_mode: int) -> None:
+    """
+    Stream a random image from a list of URLs to the client.
+    Handles retries if an image fails to stream.
+    
+    Args:
+        client_socket: The client socket to stream to
+        urls: List of image URLs
+        gfx_mode: The graphics mode to use
+    """
+    if not urls:
+        send_client_response(client_socket, "No images found", is_error=True)
+        return
+        
+    url_idx = random.randint(0, len(urls)-1)
+    url = urls[url_idx]
+    
+    # Loop if we have a problem with the image, selecting the next
+    while not stream_YAI(client_socket, gfx_mode, url=url):
+        logger.warning(f'Problem with {url} trying another...')
+        url_idx = random.randint(0, len(urls)-1)
+        url = urls[url_idx]
+        time.sleep(SOCKET_WAIT_TIME)
+
+def stream_random_image_from_files(client_socket: socket.socket, gfx_mode: int) -> None:
+    """
+    Stream a random image from the loaded filenames to the client.
+    Handles retries if an image fails to stream.
+    
+    Args:
+        client_socket: The client socket to stream to
+        gfx_mode: The graphics mode to use
+    """
+    if not filenames:
+        send_client_response(client_socket, "No image files available", is_error=True)
+        return
+        
+    file_idx = random.randint(0, len(filenames)-1)
+    filename = filenames[file_idx]
+    
+    # Loop if we have a problem with the image, selecting the next
+    while not stream_YAI(client_socket, gfx_mode, filepath=filename):
+        logger.warning(f'Problem with {filename} trying another...')
+        file_idx = random.randint(0, len(filenames)-1)
+        filename = filenames[file_idx]
+        time.sleep(SOCKET_WAIT_TIME)
+
+def stream_generated_image(client_socket: socket.socket, prompt: str, gfx_mode: int) -> None:
+    """
+    Generate an image with OpenAI and stream it to the client.
+    
+    Args:
+        client_socket: The client socket to stream to
+        prompt: The text prompt for image generation
+        gfx_mode: The graphics mode to use
+    """
+    logger.info(f"Generating image with prompt: '{prompt}'")
+    
+    # Generate image using OpenAI
+    url = generate_image_with_openai(
+        prompt, 
+        model=openai_config.model, 
+        size=openai_config.size, 
+        quality=openai_config.quality, 
+        style=openai_config.style
+    )
+    
+    if url:
+        # Stream the generated image to the client
+        if not stream_YAI(client_socket, gfx_mode, url=url):
+            logger.warning(f'Problem with generated image: {url}')
+            send_client_response(client_socket, "Failed to stream generated image", is_error=True)
+    else:
+        logger.warning('Failed to generate image with OpenAI')
+        send_client_response(client_socket, "Failed to generate image", is_error=True)
 
 def handle_client_connection(client_socket: socket.socket) -> None:
     global connections
     global camera_thread
     global camera_done
     global YAIL_H
-    global openai_model
-    global openai_size
-    global openai_quality
-    global openai_style
+    global openai_config
     
     gfx_mode = GRAPHICS_8
     client_mode = None
     last_prompt = None  # Store the last prompt for regeneration
 
     connections = connections + 1
-    logger.info(f'Starting Connection: %d' % connections)
+    logger.info(f'Starting Connection: {connections}')
 
     try:
         done = False
@@ -474,16 +629,16 @@ def handle_client_connection(client_socket: socket.socket) -> None:
         while not done:
             if len(tokens) == 0:
                 request = client_socket.recv(1024)
-                logger.info('Client request ' + pformat(request))
+                logger.info(f'Client request {request}')
                 r_string = request.decode('UTF-8')
                 tokens = r_string.rstrip(' \r\n').split(' ')
-            logger.info('Tokens ' + pformat(tokens))
+            logger.info(f'Tokens {tokens}')
 
             if tokens[0] == 'video':
                 client_mode = 'video'
                 if camera_thread is None:
                     camera_done = False
-                    camera_thread = Thread(target=camera_handler)
+                    camera_thread = Thread(target=camera_handler, args=(gfx_mode,))
                     camera_thread.daemon = True
                     camera_thread.start()
                 send_yail_data(client_socket)
@@ -492,15 +647,7 @@ def handle_client_connection(client_socket: socket.socket) -> None:
             elif tokens[0] == 'search':
                 client_mode = 'search'
                 urls = search_images(' '.join(tokens[1:]))
-                url_idx = random.randint(0, len(urls)-1)
-                url = urls[url_idx]
-                if url:
-                    # Loop if we have a problem with the image, selecting the next.
-                    while not stream_YAI(client_socket, gfx_mode, url=url):
-                        logger.warning(f'Problem with %s trying another...', url)
-                        url_idx = random.randint(0, len(urls)-1)
-                        url = urls[url_idx]
-                        time.sleep(SOCKET_WAIT_TIME)
+                stream_random_image_from_urls(client_socket, urls, gfx_mode)
                 tokens = []
                 
             elif tokens[0] == 'generate':
@@ -508,48 +655,18 @@ def handle_client_connection(client_socket: socket.socket) -> None:
                 # Join all tokens after 'generate' as the prompt
                 prompt = ' '.join(tokens[1:])
                 last_prompt = prompt  # Store the prompt for later use with 'next' command
-                logger.info(f"Generating image with prompt: '{prompt}'")
-                
-                # Generate image using OpenAI
-                url = generate_image_with_openai(prompt, model=openai_model, size=openai_size, quality=openai_quality, style=openai_style)
-                
-                if url:
-                    # Stream the generated image to the client
-                    if not stream_YAI(client_socket, gfx_mode, url=url):
-                        logger.warning(f'Problem with generated image: {url}')
-                        client_socket.send(bytes(b'ERROR: Failed to stream generated image'))
-                else:
-                    logger.warning('Failed to generate image with OpenAI')
-                    client_socket.send(bytes(b'ERROR: Failed to generate image'))
-                
+                stream_generated_image(client_socket, prompt, gfx_mode)
                 tokens = []
 
             elif tokens[0] == 'files':
                 client_mode = 'files'
-                if len(filenames) > 0:
-                    file_idx = random.randint(0, len(filenames)-1)
-                    filename = filenames[file_idx]
-                    if filename:
-                        # Loop if we have a problem with the image, selecting the next.
-                        while not stream_YAI(client_socket, gfx_mode, filepath=filename):
-                            logger.warning(f'Problem with %s trying another...', filename)
-                            file_idx = random.randint(0, len(filenames)-1)
-                            filename = filenames[file_idx]
-                            time.sleep(SOCKET_WAIT_TIME)
+                stream_random_image_from_files(client_socket, gfx_mode)
                 tokens.pop(0)
 
             elif tokens[0] == 'next':
                 if client_mode == 'search':
-                    url = None
-                    url_idx = random.randint(0, len(urls)-1)
-                    url = urls[url_idx]
-                    if url:
-                        # Loop if we have a problem with the image, selecting the next.
-                        while not stream_YAI(client_socket, gfx_mode, url=url):
-                            logger.warning('Problem with image trying another...')
-                            url_idx = random.randint(0, len(urls)-1)
-                            url = urls[url_idx]
-                            time.sleep(SOCKET_WAIT_TIME)
+                    urls = search_images(' '.join(tokens[1:]))
+                    stream_random_image_from_urls(client_socket, urls, gfx_mode)
                     tokens.pop(0)
                 elif client_mode == 'video':
                     send_yail_data(client_socket)
@@ -558,33 +675,10 @@ def handle_client_connection(client_socket: socket.socket) -> None:
                     # For generate mode, we'll regenerate with the same prompt
                     # The prompt is stored in last_prompt
                     prompt = last_prompt
-                    logger.info(f"Regenerating image with prompt: '{prompt}'")
-                    
-                    # Generate a new image with the same prompt
-                    url = generate_image_with_openai(prompt, model=openai_model, size=openai_size, quality=openai_quality, style=openai_style)
-                    
-                    if url:
-                        # Stream the generated image to the client
-                        if not stream_YAI(client_socket, gfx_mode, url=url):
-                            logger.warning(f'Problem with generated image: {url}')
-                            client_socket.send(bytes(b'ERROR: Failed to stream generated image'))
-                    else:
-                        logger.warning('Failed to generate image with OpenAI')
-                        client_socket.send(bytes(b'ERROR: Failed to generate image'))
-                    
+                    stream_generated_image(client_socket, prompt, gfx_mode)
                     tokens.pop(0)
                 elif client_mode == 'files':
-                    filename = None
-                    if len(filenames) > 0:
-                        file_idx = random.randint(0, len(filenames)-1)
-                        filename = filenames[file_idx]
-                        if filename:
-                            # Loop if we have a problem with the image, selecting the next.
-                            while not stream_YAI(client_socket, gfx_mode, filepath=filename):
-                                logger.warning(f'Problem with %s trying another...', filename)
-                                file_idx = random.randint(0, len(filenames)-1)
-                                filename = filenames[file_idx]
-                                time.sleep(SOCKET_WAIT_TIME)
+                    stream_random_image_from_files(client_socket, gfx_mode)
                     tokens.pop(0)
 
             elif tokens[0] == 'gfx':
@@ -609,54 +703,50 @@ def handle_client_connection(client_socket: socket.socket) -> None:
                         tokens.pop(0)
                         
                         if param == "model":
-                            if value in ["dall-e-3", "gpt-4o"]:
-                                openai_model = value
-                                client_socket.send(bytes(f"OpenAI model set to {value}".encode('utf-8')))
+                            if openai_config.set_model(value):
+                                send_client_response(client_socket, f"OpenAI model set to {value}")
                             else:
-                                client_socket.send(bytes(f"Invalid model. Use 'dall-e-3' or 'gpt-4o'".encode('utf-8')))
+                                send_client_response(client_socket, "Invalid model. Use 'dall-e-3' or 'gpt-4o'", is_error=True)
                         
                         elif param == "size":
-                            if value in ["1024x1024", "1792x1024", "1024x1792"]:
-                                openai_size = value
-                                client_socket.send(bytes(f"Image size set to {value}".encode('utf-8')))
+                            if openai_config.set_size(value):
+                                send_client_response(client_socket, f"Image size set to {value}")
                             else:
-                                client_socket.send(bytes(f"Invalid size. Use '1024x1024', '1792x1024', or '1024x1792'".encode('utf-8')))
+                                send_client_response(client_socket, "Invalid size. Use '1024x1024', '1792x1024', or '1024x1792'", is_error=True)
                         
                         elif param == "quality":
-                            if value in ["standard", "hd"]:
-                                openai_quality = value
-                                client_socket.send(bytes(f"Image quality set to {value}".encode('utf-8')))
+                            if openai_config.set_quality(value):
+                                send_client_response(client_socket, f"Image quality set to {value}")
                             else:
-                                client_socket.send(bytes(f"Invalid quality. Use 'standard' or 'hd'".encode('utf-8')))
+                                send_client_response(client_socket, "Invalid quality. Use 'standard' or 'hd'", is_error=True)
                         
                         elif param == "style":
-                            if value in ["vivid", "natural"]:
-                                openai_style = value
-                                client_socket.send(bytes(f"Image style set to {value}".encode('utf-8')))
+                            if openai_config.set_style(value):
+                                send_client_response(client_socket, f"Image style set to {value}")
                             else:
-                                client_socket.send(bytes(f"Invalid style. Use 'vivid' or 'natural'".encode('utf-8')))
+                                send_client_response(client_socket, "Invalid style. Use 'vivid' or 'natural'", is_error=True)
                         
                         else:
-                            client_socket.send(bytes(f"Unknown parameter '{param}'. Use 'model', 'size', 'quality', or 'style'".encode('utf-8')))
+                            send_client_response(client_socket, f"Unknown parameter '{param}'. Use 'model', 'size', 'quality', or 'style'", is_error=True)
                     else:
-                        client_socket.send(bytes(f"Current OpenAI config: model={openai_model}, size={openai_size}, quality={openai_quality}, style={openai_style}".encode('utf-8')))
+                        send_client_response(client_socket, f"Current OpenAI config: {openai_config}")
                 else:
-                    client_socket.send(bytes(f"Current OpenAI config: model={openai_model}, size={openai_size}, quality={openai_quality}, style={openai_style}".encode('utf-8')))
+                    send_client_response(client_socket, f"Current OpenAI config: {openai_config}")
 
             elif tokens[0] == 'quit':
                 done = True
                 tokens.pop(0)
 
             else:
-                logger.info('Received {}'.format(r_string.rstrip(' \r\n')))
-                client_socket.send(bytes(b'ACK!'))
+                logger.info(f'Received {r_string.rstrip(" \r\n")}')
+                send_client_response(client_socket, "ACK!")
 
     except Exception as ex:
-        logger.critical('Problem handling client ' + str(ex))
+        logger.critical(f'Problem handling client {ex}')
 
     finally:
         client_socket.close()
-        logger.info(f'Closing Connection: %d' % connections)
+        logger.info(f'Closing Connection: {connections}')
         connections = connections - 1
         if connections == 0:   # Maybe should look into killing this thread when there are no video connections.
             camera_done = True
@@ -690,20 +780,11 @@ def F(file_path):
 
 def main():
     global camera_name
-    global openai_model
-    global openai_size
-    global openai_quality
-    global openai_style
+    global openai_config
 
     # Initialize the image to send with something
     initial_image = Image.new("L", (YAIL_W,YAIL_H))
     update_yail_data(pack_shades(initial_image), GRAPHICS_8)
-
-    # Default OpenAI parameters
-    openai_model = 'dall-e-3'
-    openai_size = '1024x1024'
-    openai_quality = 'standard'
-    openai_style = 'vivid'
 
     bind_ip = '0.0.0.0'
     bind_port = 5556
@@ -728,19 +809,19 @@ def main():
             camera_name = args.camera
         
         if args.openai_api_key:
-            os.environ["OPENAI_API_KEY"] = args.openai_api_key
+            openai_config.set_api_key(args.openai_api_key)
         
         if args.openai_model:
-            openai_model = args.openai_model
+            openai_config.set_model(args.openai_model)
             
         if args.openai_size:
-            openai_size = args.openai_size
+            openai_config.set_size(args.openai_size)
             
         if args.openai_quality:
-            openai_quality = args.openai_quality
+            openai_config.set_quality(args.openai_quality)
             
         if args.openai_style:
-            openai_style = args.openai_style
+            openai_config.set_style(args.openai_style)
         
         if args.paths is not None and len(args.paths) == 1 and os.path.isdir(args.paths[0]):
             # If a single argument is passed and it's a directory
@@ -770,16 +851,14 @@ def main():
             bind_port = int(args.port[0])
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    #server.bind((bind_ip, bind_port))
-    server.bind(('', bind_port))
+    server.bind((bind_ip, bind_port))
     server.listen(10)  # max backlog of connections
 
-    #logger.info('Listening on {}:{}'.format(bind_ip, bind_port))
-    logger.info('Listening on {}:{}'.format('', bind_port))
+    logger.info(f'Listening on {bind_ip}:{bind_port}')
 
     while True:
         client_sock, address = server.accept()
-        logger.info('Accepted connection from {}:{}'.format(address[0], address[1]))
+        logger.info(f'Accepted connection from {address[0]}:{address[1]}')
         client_handler = Thread(
             target=handle_client_connection,
             args=(client_sock,)  # without comma you'd get a... TypeError: handle_client_connection() argument after * must be a sequence, not _socketobject
