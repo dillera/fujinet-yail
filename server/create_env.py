@@ -24,6 +24,7 @@ def create_env_file():
     size = "1024x1024"
     quality = "standard"
     style = "vivid"
+    system_prompt = "You are an image generation assistant. Generate an image based on the user's description."
     
     if use_advanced.lower() == 'y':
         print("\nAdvanced OpenAI Configuration")
@@ -64,6 +65,14 @@ def create_env_file():
             style_choice = input("Select style (1-2, default is 1): ")
             if style_choice == "2":
                 style = "natural"
+        
+        # System prompt
+        custom_prompt = input("\nWould you like to customize the system prompt for image generation? (y/n): ")
+        if custom_prompt.lower() == 'y':
+            print("\nDefault system prompt: " + system_prompt)
+            system_prompt = input("Enter your custom system prompt: ")
+            if not system_prompt.strip():
+                system_prompt = "You are an image generation assistant. Generate an image based on the user's description."
     
     # Create .env file content
     env_content = f"""# OpenAI API Configuration
@@ -72,6 +81,7 @@ OPENAI_MODEL={model}
 OPENAI_SIZE={size}
 OPENAI_QUALITY={quality}
 OPENAI_STYLE={style}
+OPENAI_SYSTEM_PROMPT="{system_prompt}"
 """
     
     # Write to .env file

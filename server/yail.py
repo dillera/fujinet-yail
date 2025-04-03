@@ -28,6 +28,10 @@ if os.path.exists(env_path):
 else:
     print(f"No .env file found at {env_path}. Using default environment variables.")
 
+# Debug: Print loaded environment variables
+print(f"OPENAI_MODEL from environment: {os.environ.get('OPENAI_MODEL', 'not set')}")
+print(f"OPENAI_SYSTEM_PROMPT from environment: {os.environ.get('OPENAI_SYSTEM_PROMPT', 'not set')}")
+
 # Set up logging first thing
 logging.basicConfig(level=logging.WARN)
 logger = logging.getLogger(__name__)
@@ -64,6 +68,10 @@ class OpenAIConfig:
         self.quality = os.environ.get("OPENAI_QUALITY", "standard")
         self.style = os.environ.get("OPENAI_STYLE", "vivid")
         self.api_key = os.environ.get("OPENAI_API_KEY")
+        self.system_prompt = os.environ.get("OPENAI_SYSTEM_PROMPT", "You are an image generation assistant. Generate an image based on the user's description.")
+        
+        # Debug: Print loaded configuration
+        print(f"OpenAIConfig initialized with model: {self.model}")
         
         # Validate the loaded settings
         if self.model not in self.VALID_MODELS:
@@ -109,6 +117,11 @@ class OpenAIConfig:
             self.style = style
             return True
         return False
+    
+    def set_system_prompt(self, system_prompt):
+        """Set the system prompt for image generation"""
+        self.system_prompt = system_prompt
+        return True
     
     def set_api_key(self, api_key):
         """Set the API key"""
@@ -422,14 +435,14 @@ def generate_image_with_openai(prompt: str, api_key: str = None, model: str = "d
         # Generate image based on model type
         logger.info(f"Generating image with {model} model, prompt: '{prompt}'")
         
-        if model.lower() == "gpt-4o":
+        if model.lower() in ["gpt-4o", "gpt4o"]:  # Fix the model comparison
             # GPT-4o image generation
             try:
                 # Note: Parameters may differ for GPT-4o, adjust as needed based on official documentation
                 response = client.chat.completions.create(
-                    model="gpt-4o",
+                    model=model,  # Use the model parameter instead of hardcoding
                     messages=[
-                        {"role": "system", "content": "You are an image generation assistant. Generate an image based on the user's description."},
+                        {"role": "system", "content": openai_config.system_prompt},
                         {"role": "user", "content": f"Generate an image of: {prompt}"}
                     ],
                     tools=[{"type": "image_generator"}]
@@ -459,7 +472,7 @@ def generate_image_with_openai(prompt: str, api_key: str = None, model: str = "d
             # DALL-E 3 image generation
             try:
                 response = client.images.generate(
-                    model="dall-e-3",
+                    model=model,  # Use the model parameter instead of hardcoding
                     prompt=prompt,
                     n=1,
                     size=size,
@@ -768,8 +781,14 @@ def handle_client_connection(client_socket: socket.socket) -> None:
                             else:
                                 send_client_response(client_socket, "Invalid style. Use 'vivid' or 'natural'", is_error=True)
                         
+                        elif param == "system_prompt":
+                            if openai_config.set_system_prompt(value):
+                                send_client_response(client_socket, f"System prompt set to {value}")
+                            else:
+                                send_client_response(client_socket, "Failed to set system prompt", is_error=True)
+                        
                         else:
-                            send_client_response(client_socket, f"Unknown parameter '{param}'. Use 'model', 'size', 'quality', or 'style'", is_error=True)
+                            send_client_response(client_socket, f"Unknown parameter '{param}'. Use 'model', 'size', 'quality', 'style', or 'system_prompt'", is_error=True)
                     else:
                         send_client_response(client_socket, f"Current OpenAI config: {openai_config}")
                 else:
