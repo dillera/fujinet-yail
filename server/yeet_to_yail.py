@@ -18,6 +18,15 @@ from PIL import Image
 import numpy as np
 import sys
 import openai
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+if os.path.exists(env_path):
+    load_dotenv(env_path)
+    print(f"Loaded environment variables from {env_path}")
+else:
+    print(f"No .env file found at {env_path}. Using default environment variables.")
 
 # Set up logging first thing
 logging.basicConfig(level=logging.WARN)
@@ -50,11 +59,28 @@ class OpenAIConfig:
     
     def __init__(self):
         # Default settings
-        self.model = "dall-e-3"
-        self.size = "1024x1024"
-        self.quality = "standard"
-        self.style = "vivid"
-        self.api_key = None
+        self.model = os.environ.get("OPENAI_MODEL", "dall-e-3")
+        self.size = os.environ.get("OPENAI_SIZE", "1024x1024")
+        self.quality = os.environ.get("OPENAI_QUALITY", "standard")
+        self.style = os.environ.get("OPENAI_STYLE", "vivid")
+        self.api_key = os.environ.get("OPENAI_API_KEY")
+        
+        # Validate the loaded settings
+        if self.model not in self.VALID_MODELS:
+            logger.warning(f"Invalid OPENAI_MODEL in environment: {self.model}. Using default: dall-e-3")
+            self.model = "dall-e-3"
+            
+        if self.size not in self.VALID_SIZES:
+            logger.warning(f"Invalid OPENAI_SIZE in environment: {self.size}. Using default: 1024x1024")
+            self.size = "1024x1024"
+            
+        if self.quality not in self.VALID_QUALITIES:
+            logger.warning(f"Invalid OPENAI_QUALITY in environment: {self.quality}. Using default: standard")
+            self.quality = "standard"
+            
+        if self.style not in self.VALID_STYLES:
+            logger.warning(f"Invalid OPENAI_STYLE in environment: {self.style}. Using default: vivid")
+            self.style = "vivid"
     
     def set_model(self, model):
         """Set the model if valid, otherwise return False"""
@@ -352,6 +378,11 @@ def stream_YAI(client: str, gfx_mode: int, url: str = None, filepath: str = None
 # This uses the DuckDuckGo search engine to find images.  This is handled by the duckduckgo_search package.
 def search_images(term: str, max_images: int=1000) -> list:
     logger.info(f"Searching for '{term}'")
+    # Check if the search term is empty
+    if not term or term.strip() == '':
+        logger.warning("Empty search term provided, using default term 'art'")
+        term = "art"  # Default search term if none provided
+    
     with DDGS() as ddgs:
         results = L([r for r in ddgs.images(term, max_results=max_images)])
 
@@ -645,11 +676,16 @@ def handle_client_connection(client_socket: socket.socket) -> None:
                 tokens.pop(0)
 
             elif tokens[0] == 'search':
-                client_mode = 'search'
-                urls = search_images(' '.join(tokens[1:]))
-                stream_random_image_from_urls(client_socket, urls, gfx_mode)
+                # Redirect 'search' command to use OpenAI image generation instead of DuckDuckGo
+                client_mode = 'generate'  # Set mode to 'generate' instead of 'search'
+                prompt = ' '.join(tokens[1:])
+                # Remove quotes if present (e.g., "atari" -> atari)
+                prompt = prompt.strip('"\'')
+                last_prompt = prompt  # Store the prompt for later use with 'next' command
+                logger.info(f"Using OpenAI to generate image for prompt: '{prompt}'")
+                stream_generated_image(client_socket, prompt, gfx_mode)
                 tokens = []
-                
+
             elif tokens[0] == 'generate':
                 client_mode = 'generate'
                 # Join all tokens after 'generate' as the prompt
@@ -665,7 +701,12 @@ def handle_client_connection(client_socket: socket.socket) -> None:
 
             elif tokens[0] == 'next':
                 if client_mode == 'search':
-                    urls = search_images(' '.join(tokens[1:]))
+                    # For backward compatibility, still handle 'search' mode
+                    # If no additional search terms are provided, use a default or the last search term
+                    search_term = ' '.join(tokens[1:])
+                    if not search_term.strip():
+                        logger.info("No search term provided with 'next', using default")
+                    urls = search_images(search_term, max_images=1000)
                     stream_random_image_from_urls(client_socket, urls, gfx_mode)
                     tokens.pop(0)
                 elif client_mode == 'video':
@@ -675,6 +716,7 @@ def handle_client_connection(client_socket: socket.socket) -> None:
                     # For generate mode, we'll regenerate with the same prompt
                     # The prompt is stored in last_prompt
                     prompt = last_prompt
+                    logger.info(f"Regenerating image with prompt: '{prompt}'")
                     stream_generated_image(client_socket, prompt, gfx_mode)
                     tokens.pop(0)
                 elif client_mode == 'files':

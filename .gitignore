@@ -1,6 +1,8 @@
 # Prerequisites
 *.d
 
+server/fujinet-yail.code-workspace
+
 # Assembler files
 *.s
 
