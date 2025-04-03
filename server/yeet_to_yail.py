@@ -451,11 +451,15 @@ def camera_handler(gfx_mode: int) -> None:
     camera_done = False
 
 def handle_client_connection(client_socket: socket.socket) -> None:
-    # Set up a new event loop for this thread
     global connections
     global camera_thread
     global camera_done
     global YAIL_H
+    global openai_model
+    global openai_size
+    global openai_quality
+    global openai_style
+    
     gfx_mode = GRAPHICS_8
     client_mode = None
     last_prompt = None  # Store the last prompt for regeneration
@@ -595,7 +599,6 @@ def handle_client_connection(client_socket: socket.socket) -> None:
                 tokens.pop(0)
                 if len(tokens) > 0:
                     # Process OpenAI configuration parameters
-                    global openai_model, openai_size, openai_quality, openai_style
                     
                     # Format: openai-config [param] [value]
                     param = tokens[0].lower()
