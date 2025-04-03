@@ -38,10 +38,24 @@ Usage: YAIL.XEX [OPTIONS]
 The server is written in python 
 
 To start:
-  python3 yeet_to_yail.py
+  python3 yail.py
 
-The server uses duckduckgo.com as the source for the images.
-It sends your query tokens as the search terms and builds a list of URLs that have the images.
-It then downloads the images, converts them to something compatible with gfx9 and then streams to the YAIL.XEX app.
+The server can use OpenAI's DALL-E model or DuckDuckGo as the source for images.
+By default, it uses OpenAI to generate images based on your text prompts.
+It converts the images to something compatible with gfx9 and then streams to the YAIL.XEX app.
 YAIL requests the next image by sending the server a "next" token.
-When you quit, the "quit" token is sent.
+
+### OpenAI Setup ###
+To use the OpenAI image generation feature:
+1. Run the setup script to create your .env file:
+   ```
+   cd server
+   python create_env.py
+   ```
+2. Enter your OpenAI API key when prompted
+3. Start the server:
+   ```
+   cd server
+   source .venv/bin/activate
+   python yail.py --loglevel DEBUG
+   ```

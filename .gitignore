@@ -73,6 +73,7 @@ image/
 
 # Virtual env
 server/.venv/
+server/.env
 
 #
 settings.json
